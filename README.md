@@ -1,11 +1,11 @@
-#Google - Isolated Sign Language Recognition Kaggle Competition
+# Google - Isolated Sign Language Recognition Kaggle Competition
 This is a repo containing the code I worked on with Jackson Bolos for this Kaggle Competition:
 https://www.kaggle.com/competitions/asl-signs/data
 
-###Introduction
+### Introduction
 TODO
 
-###Getting Started
+### Getting Started
 To get started with this repository, follow these steps:
 
 Clone the repository
@@ -16,7 +16,7 @@ Train a machine learning model using Scikit-Learn, TensorFlow, or PyTorch
 Use the trained model to make predictions on the test dataset
 Submit the predictions to the Kaggle competition page
 
-###Repository Structure
+### Repository Structure
 This repository contains the following files:
 requirements.txt: a list of required Python packages
 README.md: a description of the repository
