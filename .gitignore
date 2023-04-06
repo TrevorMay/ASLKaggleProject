@@ -1,0 +1,22 @@
+.idea/
+
+Notes/
+
+__pycache__/
+
+asl-signs/ 
+
+# virtual env
+
+env/
+
+ENV/
+
+venv/
+
+.venv/
+
+.ipynb_checkpoints/
+
+.pynb/
+
