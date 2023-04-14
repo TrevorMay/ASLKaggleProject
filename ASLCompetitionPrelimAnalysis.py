@@ -22,6 +22,7 @@ pd.options.mode.chained_assignment = None
 pd.set_option('display.max_columns', None)
 import numpy as np
 import sklearn
+from tqdm import tqdm
 
 # for running on CoLab or within Kaggle
 # from kaggle_datasets import KaggleDatasets
@@ -170,14 +171,14 @@ def load_relevant_data_subset(pq_path):
 # %%
 # Define the path to the root data directory
 DATA_DIR         = str(os.getcwd()) + r"\asl-signs"
-EXTEND_TRAIN_DIR = "/kaggle/input/gislr-extended-train-dataframe" 
+EXTEND_TRAIN_DIR = "/asl-signs/gislr-extended-train-dataframe" 
 
 LOAD_EXTENDED = True
 if LOAD_EXTENDED and os.path.isfile(os.path.join(EXTEND_TRAIN_DIR, "extended_train.csv")):
     train_df = pd.read_csv(os.path.join(EXTEND_TRAIN_DIR, "extended_train.csv"))
 else:
     train_df = pd.read_csv(os.path.join(DATA_DIR, "train.csv"))
-    train_df["path"] = DATA_DIR+"/"+train_df["path"]
+    train_df["path"] = DATA_DIR+"\\"+train_df["path"]
 display(train_df)
 
 print("\n\n... LOAD SIGN TO PREDICTION INDEX MAP FROM JSON FILE ...\n")
@@ -348,7 +349,278 @@ else:
     train_df = train_df[col_order]
     display(train_df)
 
+# %%
+train_df
+
+
+# %% [markdown]
+# ### Create TFRecords
+
+# %%
+class CFG:
+    data_path = r'C:\repo\math4920\ASLKaggleProject\asl-signs\\'
+    sequence_length = 12
+    rows_per_frame = 543 
+
+
+# %%
+ROWS_PER_FRAME = 543  # number of landmarks per frame
+
+def load_relevant_data_subset_with_imputation(pq_path):
+    data_columns = ['x', 'y', 'z']
+    data = pd.read_parquet(pq_path, columns=data_columns)
+    data.replace(np.nan, 0, inplace=True)
+    n_frames = int(len(data) / ROWS_PER_FRAME)
+    data = data.values.reshape(n_frames, ROWS_PER_FRAME, len(data_columns))
+    return data.astype(np.float32)
+
+def load_relevant_data_subset(pq_path):
+    data_columns = ['x', 'y', 'z']
+    data = pd.read_parquet(pq_path, columns=data_columns)
+    n_frames = int(len(data) / ROWS_PER_FRAME)
+    data = data.values.reshape(n_frames, ROWS_PER_FRAME, len(data_columns))
+    return data.astype(np.float32)
+
+def read_dict(file_path):
+    path = os.path.expanduser(file_path)
+    with open(path, "r") as f:
+        dic = json.load(f)
+    return dic
+
+
+# %%
+train = pd.read_csv(r"C:\repo\math4920\ASLKaggleProject\asl-signs\train.csv")
+label_index = read_dict(r"C:\repo\math4920\ASLKaggleProject\asl-signs\sign_to_prediction_index_map.json")
+index_label = dict([(label_index[key], key) for key in label_index])
+print(label_index)
+train["label"] = train["sign"].map(lambda sign: label_index[sign])
+train.head()
+
+
+# %%
+def create_record(feature, label):
+    dic = {}
+    dic["feature"] = tf.train.Feature(float_list=tf.train.FloatList(value=feature))
+    dic["label"] = tf.train.Feature(int64_list=tf.train.Int64List(value=[label]))
+    record_bytes = tf.train.Example(features=tf.train.Features(feature=dic)).SerializeToString()
+    return record_bytes
+    
+def decode_function(record_bytes):
+  return tf.io.parse_single_example(
+      # Data
+      record_bytes,
+      # Schema
+      {
+          "feature": tf.io.FixedLenFeature([CFG.sequence_length * CFG.rows_per_frame * 3], dtype=tf.float32),
+          "label": tf.io.FixedLenFeature([], dtype=tf.int64)
+      }
+  )
+
+
+# %%
+cwd = os.getcwd() + r"\asl-signs\tfrecords\\"
+
+for participant_id in train.participant_id.unique():
+    df = train[train.participant_id == participant_id]
+    save_path = f"{cwd}{participant_id}.tfrecords"
+    print(save_path)
+    with tf.io.TFRecordWriter(save_path) as file_writer:
+        for i in tqdm(range(len(df))):
+            path = f"{CFG.data_path}{df.iloc[i].path}"
+            feature = load_relevant_data_subset_with_imputation(path)
+            feature = tf.image.resize(tf.constant(feature), (CFG.sequence_length, 543)).numpy().reshape(-1)
+            label = int(df.iloc[i].label)
+            file_writer.write(create_record(feature, label))
+
+# %% [markdown]
+# ### Baseline Attempt
+
+# %%
+cwd = os.getcwd()
+train_x    = np.load(cwd + "/asl-signs/gislr-feature-data/feature_data.npy").astype(np.float32)
+train_y    = np.load(cwd + "/asl-signs/gislr-feature-data/feature_labels.npy").astype(np.uint8)
+BATCH_SIZE = 64
+
+N_TOTAL = train_x.shape[0]
+VAL_PCT = 0.1
+N_VAL   = int(N_TOTAL*VAL_PCT)
+N_TRAIN = N_TOTAL-N_VAL
+
+random_idxs = random.sample(range(N_TOTAL), N_TOTAL)
+train_idxs, val_idxs = np.array(random_idxs[:N_TRAIN]), np.array(random_idxs[N_TRAIN:])
+
+val_x, val_y = train_x[val_idxs], train_y[val_idxs]
+train_x, train_y = train_x[train_idxs], train_y[train_idxs]
+
+# train_ds = tf.data.Dataset.from_tensor_slices((train_x, train_y))\
+#                           .shuffle(N_TRAIN)\
+#                           .batch(BATCH_SIZE, drop_remainder=True)\
+#                           .prefetch(tf.data.AUTOTUNE)
+
+# val_ds = tf.data.Dataset.from_tensor_slices((train_x, train_y))\
+#                           .shuffle(N_VAL)\
+#                           .batch(BATCH_SIZE, drop_remainder=True)\
+#                           .prefetch(tf.data.AUTOTUNE)
+
+# train_ds, val_ds
+
+# %%
+def fc_block(inputs, output_channels, dropout=0.2):
+    x = tf.keras.layers.Dense(output_channels)(inputs)
+    x = tf.keras.layers.BatchNormalization()(x)
+    x = tf.keras.layers.Activation("gelu")(x)
+    x = tf.keras.layers.Dropout(dropout)(x)
+    return x
+
+def get_model(n_labels=250, init_fc=512, n_blocks=2, _dropout_1=0.2, _dropout_2=0.6, flat_frame_len=3258):
+    _inputs = tf.keras.layers.Input(shape=(flat_frame_len,))
+    x = _inputs
+    
+    # Define layers
+    for i in range(n_blocks):
+        x = fc_block(
+            x, output_channels=init_fc//(2**i), 
+            dropout=_dropout_1 if (1+i)!=n_blocks else _dropout_2
+        )
+    
+    # Define output layer
+    _outputs = tf.keras.layers.Dense(n_labels, activation="softmax")(x)
+    
+    # Build the model
+    model = tf.keras.models.Model(inputs=_inputs, outputs=_outputs)
+    return model
+
+model = get_model()
+model.compile(tf.keras.optimizers.Adam(0.000333), "sparse_categorical_crossentropy", metrics="acc")
+model.summary()
+
+tf.keras.utils.plot_model(model)
+
+# %%
+# # !mkdir models
+
+# %%
+cb_list = [
+    tf.keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True, verbose=1),
+    tf.keras.callbacks.ReduceLROnPlateau(patience=2, factor=0.8, verbose=1)
+]
+history = model.fit(train_x, train_y, validation_data=(val_x, val_y), epochs=100, callbacks=cb_list, batch_size=BATCH_SIZE)
+model.save("./models/asl_model")
+
+# %%
+model.evaluate(val_x, val_y)
+for x,y in zip(val_x[:10], val_y[:10]):
+    print(f"PRED: {decoder(np.argmax(model.predict(tf.expand_dims(x, axis=0), verbose=0), axis=-1)[0]):<20} – GT: {decoder(y)}")
+
+
+# %%
+class PrepInputs(tf.keras.layers.Layer):
+    def __init__(self, face_idx_range=(0, 468), lh_idx_range=(468, 489), 
+                 pose_idx_range=(489, 522), rh_idx_range=(522, 543)):
+        super(PrepInputs, self).__init__()
+        self.idx_ranges = [face_idx_range, lh_idx_range, pose_idx_range, rh_idx_range]
+        self.flat_feat_lens = [3*(_range[1]-_range[0]) for _range in self.idx_ranges]
+    
+    def call(self, x_in):
+        
+        # Split the single vector into 4
+        xs = [x_in[:, _range[0]:_range[1], :] for _range in self.idx_ranges]
+        
+        # Reshape based on specific number of keypoints
+        xs = [tf.reshape(_x, (-1, flat_feat_len)) for _x, flat_feat_len in zip(xs, self.flat_feat_lens)]
+        
+        # Drop empty rows - Empty rows are present in 
+        #   --> pose, lh, rh
+        #   --> so we don't have to for face
+        xs[1:] = [
+            tf.boolean_mask(_x, tf.reduce_all(tf.logical_not(tf.math.is_nan(_x)), axis=1), axis=0)
+            for _x in xs[1:]
+        ]
+        
+        # Get means and stds
+        x_means = [tf.math.reduce_mean(_x, axis=0) for _x in xs]
+        x_stds  = [tf.math.reduce_std(_x,  axis=0) for _x in xs]
+        
+        x_out = tf.concat([*x_means, *x_stds], axis=0)
+        x_out = tf.where(tf.math.is_finite(x_out), x_out, tf.zeros_like(x_out))
+        return tf.expand_dims(x_out, axis=0)
+    
+PrepInputs()(load_relevant_data_subset(train_df.path[0]))
+
+# %%
+print(train_df.path[0])
+
+# %%
+import tensorflow as tf
+
+class TFLiteModel(tf.Module):
+    """
+    TensorFlow Lite model that takes input tensors and applies:
+        – a preprocessing model
+        – the ISLR model 
+    """
+
+    def __init__(self, islr_model):
+        """
+        Initializes the TFLiteModel with the specified preprocessing model and ISLR model.
+        """
+        super(TFLiteModel, self).__init__()
+
+        # Load the feature generation and main models
+        self.prep_inputs = PrepInputs()
+        self.islr_model   = islr_model
+    
+    @tf.function(input_signature=[tf.TensorSpec(shape=[None, 543, 3], dtype=tf.float32, name='inputs')])
+    def __call__(self, inputs):
+        """
+        Applies the feature generation model and main model to the input tensors.
+
+        Args:
+            inputs: Input tensor with shape [batch_size, 543, 3].
+
+        Returns:
+            A dictionary with a single key 'outputs' and corresponding output tensor.
+        """
+        x = self.prep_inputs(tf.cast(inputs, dtype=tf.float32))
+        outputs = self.islr_model(x)[0, :]
+
+        # Return a dictionary with the output tensor
+        return {'outputs': outputs}
+
+tflite_keras_model = TFLiteModel(islr_model=model)
+demo_output = tflite_keras_model(load_relevant_data_subset(train_df.path[0]))["outputs"]
+decoder(np.argmax(demo_output.numpy(), axis=-1))
+
+# %%
+# !pip uninstall tflite_runtime
+
+# %%
+# !pip install tflite_runtime
+
+# %%
+keras_model_converter = tf.lite.TFLiteConverter.from_keras_model(tflite_keras_model)
+tflite_model = keras_model_converter.convert()
+with open(r'C:\repo\math4920\ASLKaggleProject\kaggle\working\models\model.tflite', 'wb') as f:
+    f.write(tflite_model)
+# # !zip submission.zip /kaggle/working/models/model.tflite
+
+
+import tflite_runtime.interpreter as tflite
+
+interpreter = tflite.Interpreter("/kaggle/working/models/model.tflite")
+found_signatures = list(interpreter.get_signature_list().keys())
+# if REQUIRED_SIGNATURE not in found_signatures:
+#     raise KernelEvalException('Required input signature not found.')
+prediction_fn = interpreter.get_signature_runner("serving_default")
+
+output = prediction_fn(inputs=load_relevant_data_subset(train_df.path[0]))
+sign = np.argmax(output["outputs"])
+
+print("PRED : ", decoder(sign))
+print("GT   : ", train_df.sign[0])
+
 # %% [markdown]
 # #### Sources:
 # https://www.kaggle.com/code/dschettler8845/gislr-learn-eda-baseline
 #
+# https://www.kaggle.com/code/lonnieqin/islr-create-tfrecord
