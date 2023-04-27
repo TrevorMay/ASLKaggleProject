@@ -2,7 +2,7 @@
 This is a repo containing the code I worked on with Jackson Bolos for this Kaggle Competition:
 https://www.kaggle.com/competitions/asl-signs/data
 
-###Introduction
+### Introduction
 From Kaggle:
 The goal of this competition is to classify (250) isolated American Sign Language (ASL) signs. You will create a TensorFlow Lite model trained on labeled landmark data extracted using the MediaPipe Holistic Solution.
 
